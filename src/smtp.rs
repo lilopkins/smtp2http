@@ -38,6 +38,8 @@ pub async fn handle_smtp_session(
             break; // Connection closed
         }
 
+        tracing::debug!("[SMTP] -> {line}");
+
         if in_data_mode {
             if line == ".\r\n" || line == ".\n" {
                 in_data_mode = false;
@@ -197,6 +199,7 @@ const fn spf_response(result: SpfResult) -> &'static str {
 }
 
 async fn send_line<S: AsyncWriteExt + Unpin>(stream: &mut S, msg: &str) -> Result<()> {
+    tracing::debug!("[SMTP] <- {msg}");
     stream.write_all(msg.as_bytes()).await?;
     stream.flush().await?;
     Ok(())
