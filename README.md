@@ -2,6 +2,9 @@
 
 `smtps2http` accepts SMTP messages and forwards their RFC 822 source to an HTTP
 webhook as a `POST` request with `Content-Type: message/rfc822`.
+SPF is checked against the connecting client's IP and the `MAIL FROM` domain;
+explicit SPF failures are rejected, and temporary DNS failures receive a
+retryable SMTP response.
 
 It can listen on standard SMTP with STARTTLS (port 25), SMTPS (port 465), and
 submission with STARTTLS (port 587).

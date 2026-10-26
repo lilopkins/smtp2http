@@ -4,6 +4,7 @@
 
 use color_eyre::Result;
 use config::Config;
+use mail_auth::MessageAuthenticator;
 use reqwest::{
     Client,
     header::{self, HeaderMap, HeaderValue},
@@ -32,6 +33,7 @@ async fn main() -> Result<()> {
     tracing::debug!("{settings:#?}");
 
     let tls_acceptor = tls::init_tls_acceptor(&settings)?;
+    let spf_authenticator = MessageAuthenticator::new_system_conf()?;
     let http_client = reqwest::Client::builder()
         .default_headers({
             let mut map = HeaderMap::new();
@@ -54,7 +56,9 @@ async fn main() -> Result<()> {
         false,
         tls_acceptor.clone(),
         http_client.clone(),
-    ).await;
+        spf_authenticator.clone(),
+    )
+    .await;
 
     Ok(())
 }
@@ -66,6 +70,7 @@ async fn handle_connections(
     require_tls_from_start: bool,
     tls_acceptor: TlsAcceptor,
     http_client: Client,
+    spf_authenticator: MessageAuthenticator,
 ) {
     loop {
         match listener.accept().await {
@@ -75,6 +80,7 @@ async fn handle_connections(
                 let tls_acceptor = tls_acceptor.clone();
                 let settings = settings.clone();
                 let http_client = http_client.clone();
+                let spf_authenticator = spf_authenticator.clone();
                 tokio::spawn(async move {
                     if require_tls_from_start {
                         match tls_acceptor.accept(socket).await {
@@ -85,8 +91,10 @@ async fn handle_connections(
                                 if let Err(e) = smtp::handle_smtp_session(
                                     &settings,
                                     reader,
+                                    peer_addr.ip(),
                                     tls_acceptor,
                                     http_client,
+                                    spf_authenticator,
                                     true,
                                 )
                                 .await
@@ -102,8 +110,10 @@ async fn handle_connections(
                         if let Err(e) = smtp::handle_smtp_session(
                             &settings,
                             reader,
+                            peer_addr.ip(),
                             tls_acceptor,
                             http_client,
+                            spf_authenticator,
                             false,
                         )
                         .await
