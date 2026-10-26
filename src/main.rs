@@ -24,7 +24,7 @@ mod webhook;
 async fn main() -> Result<()> {
     color_eyre::install()?;
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_env("SMTP2HTTP_LOG"))
+        .with_env_filter(EnvFilter::from_env("SMTP2HTTP__LOG"))
         .init();
     let settings: settings::Settings = Config::builder()
         .add_source(config::File::with_name("config").required(false))
