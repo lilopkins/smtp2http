@@ -13,6 +13,7 @@ strip = true
 color-eyre = "0.6.5"
 config = "0.15.27"
 mail-auth = "0.14.1"
+rcgen = "0.14.10"
 reqwest = "0.13.5"
 rustls-pemfile = "2.2.0"
 serde = { version = "1.0.229", features = ["derive"] }

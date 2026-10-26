@@ -6,8 +6,12 @@ pub struct Settings {
     pub server_domain: String,
     #[serde(default = "default_smtp_port")]
     pub smtp_port: u16,
-    pub tls_cert: FileOrValue,
-    pub tls_key: FileOrValue,
+    #[serde(default)]
+    pub generate_tls_cert: bool,
+    #[serde(default)]
+    pub tls_cert: Option<FileOrValue>,
+    #[serde(default)]
+    pub tls_key: Option<FileOrValue>,
     pub webhook: String,
 }
 
@@ -15,7 +19,7 @@ pub struct Settings {
 #[serde(untagged)]
 pub enum FileOrValue {
     Value { value: String },
-    File { path: String },
+    File { file: String },
 }
 
 const fn default_smtp_port() -> u16 {

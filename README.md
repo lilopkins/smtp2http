@@ -12,19 +12,20 @@ submission with STARTTLS (port 587).
 ## Configuration
 
 Configuration is loaded from an optional `config` file in the working directory
-(for example, `config.toml`) and then overridden by `SMTP2HTTP_` environment
+(for example, `config.toml`) and then overridden by `SMTP2HTTP__` environment
 variables.
 
 | Environment variable | Config key | Default | Description |
 | --- | --- | --- | --- |
-| `SMTP2HTTP_SERVER_DOMAIN` | `server_domain` | `smtp2http.local` | Domain shown in SMTP greetings. |
-| `SMTP2HTTP_SMTP_PORT` | `smtp_port` | `25` | SMTP listener port. |
-| `SMTP2HTTP_TLS_CERT__PATH` | `tls_cert.path` | Required | TLS certificate path. Mutually exclusive with TLS certificate value. |
-| `SMTP2HTTP_TLS_CERT__VALUE` | `tls_cert.value` | Required | TLS certificate value. Mutually exclusive with TLS certificate path. |
-| `SMTP2HTTP_TLS_KEY__PATH` | `tls_key.path` | Required | TLS key path. Mutually exclusive with TLS key value. |
-| `SMTP2HTTP_TLS_KEY__VALUE` | `tls_key.value` | Required | TLS key value. Mutually exclusive with TLS key path. |
-| `SMTP2HTTP_WEBHOOK` | `webhook` | Required | HTTP endpoint that receives each message. |
-| `SMTP2HTTP_LOG` | N/A | Logging default | `tracing` filter, such as `info` or `debug`. |
+| `SMTP2HTTP__SERVER_DOMAIN` | `server_domain` | `smtp2http.local` | Domain shown in SMTP greetings. |
+| `SMTP2HTTP__SMTP_PORT` | `smtp_port` | `25` | SMTP listener port. |
+| `SMTP2HTTP__TLS_CERT__FILE` | `tls_cert.file` | Required unless generating | TLS certificate PEM file. |
+| `SMTP2HTTP__TLS_CERT__VALUE` | `tls_cert.value` | Required unless generating | TLS certificate PEM value. |
+| `SMTP2HTTP__TLS_KEY__FILE` | `tls_key.file` | Required unless generating | TLS private key PEM file. |
+| `SMTP2HTTP__TLS_KEY__VALUE` | `tls_key.value` | Required unless generating | TLS private key PEM value. |
+| `SMTP2HTTP__GENERATE_TLS_CERT` | `generate_tls_cert` | `false` | Generate an ephemeral self-signed certificate for `server_domain` on startup instead of configuring a certificate and key. |
+| `SMTP2HTTP__WEBHOOK` | `webhook` | Required | HTTP endpoint that receives each message. |
+| `SMTP2HTTP__LOG` | N/A | Logging default | `tracing` filter, such as `info` or `debug`. |
 
 ## TLS certificate
 
@@ -39,9 +40,11 @@ openssl req -x509 -newkey rsa:4096 -sha256 -nodes -days 365 \
   -addext "subjectAltName=DNS:localhost"
 ```
 
-Configure `tls_cert.path` and `tls_key.path` (or their corresponding environment
-variables) to use these files. Use a certificate issued by a trusted certificate
-authority for production.
+Configure `tls_cert.file` and `tls_key.file` (or their corresponding environment
+variables) to use these files. To generate a new ephemeral self-signed
+certificate on each startup instead, set `SMTP2HTTP__GENERATE_TLS_CERT=true` and
+omit the certificate and key settings. This is useful for development; use a
+certificate issued by a trusted certificate authority for production.
 
 ## Docker
 
