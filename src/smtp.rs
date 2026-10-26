@@ -22,7 +22,7 @@ pub async fn handle_smtp_session(
 ) -> Result<()> {
     send_line(
         &mut reader,
-        &format!("220 {} ESMTP Ready\r\n", settings.server_domain),
+        &format!("220 2.0.0 {} ESMTP Ready\r\n", settings.server_domain),
     )
     .await?;
 
@@ -112,7 +112,7 @@ pub async fn handle_smtp_session(
         } else if command_upper == "DATA" {
             if mail_from_accepted {
                 in_data_mode = true;
-                send_line(&mut reader, "354 End data with <CR><LF>.<CR><LF>\r\n").await?;
+                send_line(&mut reader, "354 3.0.0 End data with <CR><LF>.<CR><LF>\r\n").await?;
             } else {
                 send_line(&mut reader, "503 5.5.1 MAIL FROM required\r\n").await?;
             }
@@ -208,12 +208,13 @@ fn hello_response(server_domain: &str, supports_starttls: bool, is_ehlo: bool) -
     let mut response = format!("250-{server_domain} Hello\r\n");
     if is_ehlo {
         response.push_str("250-PIPELINING\r\n");
+        response.push_str("250-ENHANCEDSTATUSCODES\r\n");
     }
     response.push_str("250-8BITMIME\r\n");
     if supports_starttls {
         response.push_str("250-STARTTLS\r\n");
     }
-    response.push_str("250 OK\r\n");
+    response.push_str("250 2.0.0 OK\r\n");
     response
 }
 
@@ -256,7 +257,7 @@ mod tests {
         let mut response = BufReader::new(&mut client);
         let mut line = String::new();
         response.read_line(&mut line).await.unwrap();
-        assert_eq!(line, "220 smtp.example.org ESMTP Ready\r\n");
+        assert_eq!(line, "220 2.0.0 smtp.example.org ESMTP Ready\r\n");
 
         response
             .get_mut()
@@ -273,6 +274,7 @@ mod tests {
             }
         }
         assert!(ehlo_response.contains("250-PIPELINING\r\n"));
+        assert!(ehlo_response.contains("250-ENHANCEDSTATUSCODES\r\n"));
 
         response
             .get_mut()
