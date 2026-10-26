@@ -26,6 +26,28 @@ pub async fn handle_smtp_session(
     )
     .await?;
 
+    run_smtp_session(
+        settings,
+        reader,
+        client_ip,
+        tls_acceptor,
+        http_client,
+        spf_authenticator,
+        is_tls,
+    )
+    .await
+}
+
+// Runs the command loop without a greeting, so it can also resume after STARTTLS.
+async fn run_smtp_session(
+    settings: &Settings,
+    mut reader: BufReader<Box<dyn SmtpStream>>,
+    client_ip: IpAddr,
+    tls_acceptor: TlsAcceptor,
+    http_client: Client,
+    spf_authenticator: MessageAuthenticator,
+    is_tls: bool,
+) -> Result<()> {
     let mut raw_email_data = String::new();
     let mut in_data_mode = false;
     let mut helo_domain = String::new();
@@ -81,7 +103,7 @@ pub async fn handle_smtp_session(
 
             // Re-wrap upgraded stream into worker session
             let stream: Box<dyn SmtpStream> = Box::new(tokio_rustls::TlsStream::Server(tls_stream));
-            return Box::pin(handle_smtp_session(
+            return Box::pin(run_smtp_session(
                 settings,
                 BufReader::new(stream),
                 client_ip,
