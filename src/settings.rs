@@ -9,6 +9,8 @@ pub struct Settings {
     #[serde(default)]
     pub generate_tls_cert: bool,
     #[serde(default)]
+    pub disable_spf_validation: bool,
+    #[serde(default)]
     pub tls_cert: Option<FileOrValue>,
     #[serde(default)]
     pub tls_key: Option<FileOrValue>,

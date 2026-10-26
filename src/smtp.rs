@@ -92,16 +92,16 @@ pub async fn handle_smtp_session(
             .await;
         } else if command_upper.starts_with("MAIL FROM:") {
             if let Some(sender) = parse_mail_from(&line) {
-                let result = verify_spf(
+                let (accepted, response) = validate_sender(
+                    settings,
                     &spf_authenticator,
                     client_ip,
                     &helo_domain,
-                    &settings.server_domain,
                     sender,
                 )
                 .await;
-                mail_from_accepted = !matches!(result, SpfResult::Fail | SpfResult::TempError);
-                send_line(&mut reader, spf_response(result)).await?;
+                mail_from_accepted = accepted;
+                send_line(&mut reader, response).await?;
             } else {
                 mail_from_accepted = false;
                 send_line(&mut reader, "501 5.5.2 Invalid MAIL FROM\r\n").await?;
@@ -161,6 +161,31 @@ async fn verify_spf(
         ))
         .await
         .result()
+}
+
+async fn validate_sender(
+    settings: &Settings,
+    authenticator: &MessageAuthenticator,
+    client_ip: IpAddr,
+    helo_domain: &str,
+    sender: &str,
+) -> (bool, &'static str) {
+    if settings.disable_spf_validation {
+        return (true, "250 2.1.0 Ok\r\n");
+    }
+
+    let result = verify_spf(
+        authenticator,
+        client_ip,
+        helo_domain,
+        &settings.server_domain,
+        sender,
+    )
+    .await;
+    (
+        !matches!(result, SpfResult::Fail | SpfResult::TempError),
+        spf_response(result),
+    )
 }
 
 const fn spf_response(result: SpfResult) -> &'static str {

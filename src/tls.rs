@@ -75,6 +75,7 @@ mod tests {
             server_domain: "smtp.example.org".to_string(),
             smtp_port: 25,
             generate_tls_cert: true,
+            disable_spf_validation: false,
             tls_cert: None,
             tls_key: None,
             webhook: "https://example.org".to_string(),

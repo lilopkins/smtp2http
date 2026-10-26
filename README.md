@@ -19,6 +19,7 @@ variables.
 | --- | --- | --- | --- |
 | `SMTP2HTTP__SERVER_DOMAIN` | `server_domain` | `smtp2http.local` | Domain shown in SMTP greetings. |
 | `SMTP2HTTP__SMTP_PORT` | `smtp_port` | `25` | SMTP listener port. |
+| `SMTP2HTTP__DISABLE_SPF_VALIDATION` | `disable_spf_validation` | `false` | Disable SPF checks for SMTP senders. |
 | `SMTP2HTTP__TLS_CERT__FILE` | `tls_cert.file` | Required unless generating | TLS certificate PEM file. |
 | `SMTP2HTTP__TLS_CERT__VALUE` | `tls_cert.value` | Required unless generating | TLS certificate PEM value. |
 | `SMTP2HTTP__TLS_KEY__FILE` | `tls_key.file` | Required unless generating | TLS private key PEM file. |
