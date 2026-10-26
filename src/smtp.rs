@@ -22,10 +22,32 @@ pub async fn handle_smtp_session(
 ) -> Result<()> {
     send_line(
         &mut reader,
-        &format!("220 {} ESMTP Ready\r\n", settings.server_domain),
+        &format!("220 2.0.0 {} ESMTP Ready\r\n", settings.server_domain),
     )
     .await?;
 
+    run_smtp_session(
+        settings,
+        reader,
+        client_ip,
+        tls_acceptor,
+        http_client,
+        spf_authenticator,
+        is_tls,
+    )
+    .await
+}
+
+// Runs the command loop without a greeting, so it can also resume after STARTTLS.
+async fn run_smtp_session(
+    settings: &Settings,
+    mut reader: BufReader<Box<dyn SmtpStream>>,
+    client_ip: IpAddr,
+    tls_acceptor: TlsAcceptor,
+    http_client: Client,
+    spf_authenticator: MessageAuthenticator,
+    is_tls: bool,
+) -> Result<()> {
     let mut raw_email_data = String::new();
     let mut in_data_mode = false;
     let mut helo_domain = String::new();
@@ -37,6 +59,8 @@ pub async fn handle_smtp_session(
         if bytes_read == 0 {
             break; // Connection closed
         }
+
+        tracing::debug!("[SMTP] -> {line}");
 
         if in_data_mode {
             if line == ".\r\n" || line == ".\n" {
@@ -65,12 +89,11 @@ pub async fn handle_smtp_session(
                 .nth(1)
                 .unwrap_or_default()
                 .to_string();
-            let mut capabilities =
-                format!("250-{} Hello\r\n250-8BITMIME\r\n", settings.server_domain);
-            if !is_tls {
-                capabilities.push_str("250-STARTTLS\r\n");
-            }
-            capabilities.push_str("250 OK\r\n");
+            let capabilities = hello_response(
+                &settings.server_domain,
+                !is_tls,
+                command_upper.starts_with("EHLO"),
+            );
             send_line(&mut reader, &capabilities).await?;
         } else if command_upper.starts_with("STARTTLS") && !is_tls {
             send_line(&mut reader, "220 2.0.0 Ready to start TLS\r\n").await?;
@@ -80,7 +103,7 @@ pub async fn handle_smtp_session(
 
             // Re-wrap upgraded stream into worker session
             let stream: Box<dyn SmtpStream> = Box::new(tokio_rustls::TlsStream::Server(tls_stream));
-            return Box::pin(handle_smtp_session(
+            return Box::pin(run_smtp_session(
                 settings,
                 BufReader::new(stream),
                 client_ip,
@@ -111,7 +134,7 @@ pub async fn handle_smtp_session(
         } else if command_upper == "DATA" {
             if mail_from_accepted {
                 in_data_mode = true;
-                send_line(&mut reader, "354 End data with <CR><LF>.<CR><LF>\r\n").await?;
+                send_line(&mut reader, "354 3.0.0 End data with <CR><LF>.<CR><LF>\r\n").await?;
             } else {
                 send_line(&mut reader, "503 5.5.1 MAIL FROM required\r\n").await?;
             }
@@ -197,15 +220,107 @@ const fn spf_response(result: SpfResult) -> &'static str {
 }
 
 async fn send_line<S: AsyncWriteExt + Unpin>(stream: &mut S, msg: &str) -> Result<()> {
+    tracing::debug!("[SMTP] <- {msg}");
     stream.write_all(msg.as_bytes()).await?;
     stream.flush().await?;
     Ok(())
 }
 
+fn hello_response(server_domain: &str, supports_starttls: bool, is_ehlo: bool) -> String {
+    let mut response = format!("250-{server_domain} Hello\r\n");
+    if is_ehlo {
+        response.push_str("250-PIPELINING\r\n");
+        response.push_str("250-ENHANCEDSTATUSCODES\r\n");
+    }
+    response.push_str("250-8BITMIME\r\n");
+    if supports_starttls {
+        response.push_str("250-STARTTLS\r\n");
+    }
+    response.push_str("250 2.0.0 OK\r\n");
+    response
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_mail_from, spf_response};
+    use std::net::{IpAddr, Ipv4Addr};
+
     use mail_auth::SpfResult;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
+
+    use super::{SmtpStream, handle_smtp_session, parse_mail_from, spf_response};
+    use crate::{settings::Settings, tls::init_tls_acceptor};
+
+    #[tokio::test]
+    async fn handles_pipelined_smtp_commands() {
+        let settings = Settings {
+            server_domain: "smtp.example.org".to_string(),
+            smtp_port: 25,
+            generate_tls_cert: true,
+            disable_spf_validation: true,
+            tls_cert: None,
+            tls_key: None,
+            webhook: "http://127.0.0.1".to_string(),
+        };
+        let tls_acceptor = init_tls_acceptor(&settings).unwrap();
+        let authenticator = mail_auth::MessageAuthenticator::new_system_conf().unwrap();
+        let (mut client, server) = duplex(4096);
+        let session = tokio::spawn(async move {
+            handle_smtp_session(
+                &settings,
+                BufReader::new(Box::new(server) as Box<dyn SmtpStream>),
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                tls_acceptor,
+                reqwest::Client::new(),
+                authenticator,
+                false,
+            )
+            .await
+        });
+        let mut response = BufReader::new(&mut client);
+        let mut line = String::new();
+        response.read_line(&mut line).await.unwrap();
+        assert_eq!(line, "220 2.0.0 smtp.example.org ESMTP Ready\r\n");
+
+        response
+            .get_mut()
+            .write_all(b"EHLO sender.example\r\n")
+            .await
+            .unwrap();
+        let mut ehlo_response = String::new();
+        loop {
+            line.clear();
+            response.read_line(&mut line).await.unwrap();
+            ehlo_response.push_str(&line);
+            if line.starts_with("250 ") {
+                break;
+            }
+        }
+        assert!(ehlo_response.contains("250-PIPELINING\r\n"));
+        assert!(ehlo_response.contains("250-ENHANCEDSTATUSCODES\r\n"));
+
+        response
+            .get_mut()
+            .write_all(
+                b"MAIL FROM:<sender@example.org>\r\nRCPT TO:<recipient@example.org>\r\nRSET\r\nQUIT\r\n",
+            )
+            .await
+            .unwrap();
+
+        let expected = [
+            "250 2.1.0 Ok\r\n",
+            "250 2.1.0 Ok\r\n",
+            "250 2.0.0 OK\r\n",
+            "221 2.0.0 Bye\r\n",
+        ];
+        for expected_response in expected {
+            line.clear();
+            response.read_line(&mut line).await.unwrap();
+            assert_eq!(line, expected_response);
+        }
+
+        drop(response);
+        session.await.unwrap().unwrap();
+    }
 
     #[test]
     fn parses_mail_from_path() {
