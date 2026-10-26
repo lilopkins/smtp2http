@@ -9,7 +9,8 @@ use reqwest::{
     Client,
     header::{self, HeaderMap, HeaderValue},
 };
-use tokio::{io::BufReader, net::TcpListener};
+use std::future::Future;
+use tokio::{io::BufReader, net::TcpListener, task::JoinSet};
 use tokio_rustls::{TlsAcceptor, TlsStream};
 use tracing_subscriber::EnvFilter;
 
@@ -47,83 +48,142 @@ async fn main() -> Result<()> {
         })
         .build()?;
 
-    let prefix = "SMTP";
     let listener = socket::bind(settings.smtp_port)?;
+    let shutdown = shutdown_signal()?;
     handle_connections(
-        settings.clone(),
-        prefix,
         listener,
-        false,
-        tls_acceptor.clone(),
-        http_client.clone(),
-        spf_authenticator.clone(),
+        ConnectionHandler {
+            settings: settings.clone(),
+            prefix: "SMTP".to_string(),
+            require_tls_from_start: false,
+            tls_acceptor,
+            http_client,
+            spf_authenticator,
+        },
+        shutdown,
     )
-    .await;
+    .await?;
 
     Ok(())
 }
 
-async fn handle_connections(
+#[cfg(unix)]
+fn shutdown_signal() -> Result<impl Future<Output = Result<()>>> {
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+
+    Ok(async move {
+        tokio::select! {
+            _ = interrupt.recv() => tracing::info!("Received interrupt signal; shutting down"),
+            _ = terminate.recv() => tracing::info!("Received SIGTERM; shutting down"),
+        }
+
+        Ok(())
+    })
+}
+
+#[cfg(not(unix))]
+fn shutdown_signal() -> Result<impl Future<Output = Result<()>>> {
+    Ok(async {
+        tokio::signal::ctrl_c().await?;
+        tracing::info!("Received interrupt signal; shutting down");
+        Ok(())
+    })
+}
+
+#[derive(Clone)]
+struct ConnectionHandler {
     settings: settings::Settings,
-    prefix: &str,
-    listener: TcpListener,
+    prefix: String,
     require_tls_from_start: bool,
     tls_acceptor: TlsAcceptor,
     http_client: Client,
     spf_authenticator: MessageAuthenticator,
-) {
+}
+
+async fn handle_connections<F>(
+    listener: TcpListener,
+    handler: ConnectionHandler,
+    shutdown: F,
+) -> Result<()>
+where
+    F: Future<Output = Result<()>>,
+{
+    tokio::pin!(shutdown);
+    let mut sessions = JoinSet::new();
+
     loop {
-        match listener.accept().await {
-            Ok((socket, peer_addr)) => {
-                tracing::info!("[{prefix}] Incoming from: {peer_addr}");
-                let prefix = prefix.to_string();
-                let tls_acceptor = tls_acceptor.clone();
-                let settings = settings.clone();
-                let http_client = http_client.clone();
-                let spf_authenticator = spf_authenticator.clone();
-                tokio::spawn(async move {
-                    if require_tls_from_start {
-                        match tls_acceptor.accept(socket).await {
+        tokio::select! {
+            signal = &mut shutdown => {
+                signal?;
+                break;
+            }
+            Some(result) = sessions.join_next(), if !sessions.is_empty() => {
+                if let Err(error) = result
+                    && !error.is_cancelled() {
+                        tracing::error!("SMTP session task failed: {error}");
+                }
+            }
+            accepted = listener.accept() => match accepted {
+                Ok((socket, peer_addr)) => {
+                tracing::info!("[{}] Incoming from: {peer_addr}", handler.prefix);
+                let handler = handler.clone();
+                sessions.spawn(async move {
+                    if handler.require_tls_from_start {
+                        match handler.tls_acceptor.accept(socket).await {
                             Ok(tls_stream) => {
                                 let stream: Box<dyn smtp::SmtpStream> =
                                     Box::new(TlsStream::Server(tls_stream));
                                 let reader = BufReader::new(stream);
                                 if let Err(e) = smtp::handle_smtp_session(
-                                    &settings,
+                                    &handler.settings,
                                     reader,
                                     peer_addr.ip(),
-                                    tls_acceptor,
-                                    http_client,
-                                    spf_authenticator,
+                                    handler.tls_acceptor,
+                                    handler.http_client,
+                                    handler.spf_authenticator,
                                     true,
                                 )
                                 .await
                                 {
-                                    eprintln!("[{prefix}] SMTP session failed: {e:?}");
+                                    eprintln!("[{}] SMTP session failed: {e:?}", handler.prefix);
                                 }
                             }
-                            Err(e) => eprintln!("[{prefix}] TLS handshake failed: {e:?}"),
+                            Err(e) => eprintln!("[{}] TLS handshake failed: {e:?}", handler.prefix),
                         }
                     } else {
                         let stream: Box<dyn smtp::SmtpStream> = Box::new(socket);
                         let reader = BufReader::new(stream);
                         if let Err(e) = smtp::handle_smtp_session(
-                            &settings,
+                            &handler.settings,
                             reader,
                             peer_addr.ip(),
-                            tls_acceptor,
-                            http_client,
-                            spf_authenticator,
+                            handler.tls_acceptor,
+                            handler.http_client,
+                            handler.spf_authenticator,
                             false,
                         )
                         .await
                         {
-                            eprintln!("[{prefix}] SMTP session failed: {e:?}");
+                            eprintln!("[{}] SMTP session failed: {e:?}", handler.prefix);
                         }
                     }
                 });
-            }
-            Err(e) => eprintln!("[{prefix}] Accept error: {e:?}"),
+                }
+                Err(error) => tracing::error!("[{}] Accept error: {error:?}", handler.prefix),
+            },
         }
     }
+
+    tracing::info!("Stopping {} active SMTP session(s)", sessions.len());
+    sessions.abort_all();
+    while let Some(result) = sessions.join_next().await {
+        if let Err(error) = result
+            && !error.is_cancelled()
+        {
+            tracing::error!("SMTP session task failed during shutdown: {error}");
+        }
+    }
+
+    Ok(())
 }
