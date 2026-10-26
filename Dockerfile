@@ -1,4 +1,4 @@
-FROM rust:1.96.1-slim as builder
+FROM rust:slim as builder
 
 WORKDIR /usr/src/
 
@@ -12,6 +12,6 @@ FROM debian:trixie-slim
 WORKDIR /usr/app
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /usr/src/target/release/smtps2http smtps2http
+COPY --from=builder /usr/src/target/release/smtp2http smtp2http
 
-CMD ["/usr/app/smtps2http"]
+CMD ["/usr/app/smtp2http"]

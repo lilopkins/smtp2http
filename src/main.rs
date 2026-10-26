@@ -23,11 +23,11 @@ mod webhook;
 async fn main() -> Result<()> {
     color_eyre::install()?;
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_env("SMTPS2HTTP_LOG"))
+        .with_env_filter(EnvFilter::from_env("SMTP2HTTP_LOG"))
         .init();
     let settings: settings::Settings = Config::builder()
         .add_source(config::File::with_name("config").required(false))
-        .add_source(config::Environment::with_prefix("SMTPS2HTTP").separator("__"))
+        .add_source(config::Environment::with_prefix("SMTP2HTTP").separator("__"))
         .build()?
         .try_deserialize()?;
     tracing::debug!("{settings:#?}");

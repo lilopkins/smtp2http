@@ -1,5 +1,5 @@
 [package]
-name = "smtps2http"
+name = "smtp2http"
 version = "0.1.0"
 edition = "2024"
 

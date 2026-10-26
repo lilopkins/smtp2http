@@ -23,5 +23,5 @@ const fn default_smtp_port() -> u16 {
 }
 
 fn default_server_domain() -> String {
-    "smtps2http.local".to_string()
+    "smtp2http.local".to_string()
 }
