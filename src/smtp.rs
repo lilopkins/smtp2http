@@ -67,12 +67,11 @@ pub async fn handle_smtp_session(
                 .nth(1)
                 .unwrap_or_default()
                 .to_string();
-            let mut capabilities =
-                format!("250-{} Hello\r\n250-8BITMIME\r\n", settings.server_domain);
-            if !is_tls {
-                capabilities.push_str("250-STARTTLS\r\n");
-            }
-            capabilities.push_str("250 OK\r\n");
+            let capabilities = hello_response(
+                &settings.server_domain,
+                !is_tls,
+                command_upper.starts_with("EHLO"),
+            );
             send_line(&mut reader, &capabilities).await?;
         } else if command_upper.starts_with("STARTTLS") && !is_tls {
             send_line(&mut reader, "220 2.0.0 Ready to start TLS\r\n").await?;
@@ -205,10 +204,99 @@ async fn send_line<S: AsyncWriteExt + Unpin>(stream: &mut S, msg: &str) -> Resul
     Ok(())
 }
 
+fn hello_response(server_domain: &str, supports_starttls: bool, is_ehlo: bool) -> String {
+    let mut response = format!("250-{server_domain} Hello\r\n");
+    if is_ehlo {
+        response.push_str("250-PIPELINING\r\n");
+    }
+    response.push_str("250-8BITMIME\r\n");
+    if supports_starttls {
+        response.push_str("250-STARTTLS\r\n");
+    }
+    response.push_str("250 OK\r\n");
+    response
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_mail_from, spf_response};
+    use std::net::{IpAddr, Ipv4Addr};
+
     use mail_auth::SpfResult;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex};
+
+    use super::{SmtpStream, handle_smtp_session, parse_mail_from, spf_response};
+    use crate::{settings::Settings, tls::init_tls_acceptor};
+
+    #[tokio::test]
+    async fn handles_pipelined_smtp_commands() {
+        let settings = Settings {
+            server_domain: "smtp.example.org".to_string(),
+            smtp_port: 25,
+            generate_tls_cert: true,
+            disable_spf_validation: true,
+            tls_cert: None,
+            tls_key: None,
+            webhook: "http://127.0.0.1".to_string(),
+        };
+        let tls_acceptor = init_tls_acceptor(&settings).unwrap();
+        let authenticator = mail_auth::MessageAuthenticator::new_system_conf().unwrap();
+        let (mut client, server) = duplex(4096);
+        let session = tokio::spawn(async move {
+            handle_smtp_session(
+                &settings,
+                BufReader::new(Box::new(server) as Box<dyn SmtpStream>),
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                tls_acceptor,
+                reqwest::Client::new(),
+                authenticator,
+                false,
+            )
+            .await
+        });
+        let mut response = BufReader::new(&mut client);
+        let mut line = String::new();
+        response.read_line(&mut line).await.unwrap();
+        assert_eq!(line, "220 smtp.example.org ESMTP Ready\r\n");
+
+        response
+            .get_mut()
+            .write_all(b"EHLO sender.example\r\n")
+            .await
+            .unwrap();
+        let mut ehlo_response = String::new();
+        loop {
+            line.clear();
+            response.read_line(&mut line).await.unwrap();
+            ehlo_response.push_str(&line);
+            if line.starts_with("250 ") {
+                break;
+            }
+        }
+        assert!(ehlo_response.contains("250-PIPELINING\r\n"));
+
+        response
+            .get_mut()
+            .write_all(
+                b"MAIL FROM:<sender@example.org>\r\nRCPT TO:<recipient@example.org>\r\nRSET\r\nQUIT\r\n",
+            )
+            .await
+            .unwrap();
+
+        let expected = [
+            "250 2.1.0 Ok\r\n",
+            "250 2.1.0 Ok\r\n",
+            "250 2.0.0 OK\r\n",
+            "221 2.0.0 Bye\r\n",
+        ];
+        for expected_response in expected {
+            line.clear();
+            response.read_line(&mut line).await.unwrap();
+            assert_eq!(line, expected_response);
+        }
+
+        drop(response);
+        session.await.unwrap().unwrap();
+    }
 
     #[test]
     fn parses_mail_from_path() {
